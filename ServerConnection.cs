@@ -6,43 +6,15 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Tasks;
+using HomeAssistantShortcuts.Helper;
+using Newtonsoft.Json;
 
 namespace HomeAssistantShortcuts
 {
     sealed class PingResponse
     {
         public string? message { get; set; }
-    }
-
-    sealed class ServiceResponseItem
-    {
-        public string? domain { get; set; }
-        public Dictionary<string, ServiceResponseItemService>? services { get; set; }
-    }
-
-    sealed class ServiceResponseItemService
-    {
-        public string? description { get; set; }
-        public Dictionary<string, ServiceResponseItemServiceField>? fields { get; set; }
-    }
-
-    sealed class ServiceResponseItemServiceField
-    {
-        public string? description { get; set; }
-    }
-
-    public sealed class Service
-    {
-        public string Path { get; private set; }
-        public string Description { get; private set; }
-
-        public Service(string path, string? description)
-        {
-            Path = path;
-            Description = description ?? "";
-        }
     }
 
     public sealed class ServerConnection : IDisposable
@@ -75,64 +47,67 @@ namespace HomeAssistantShortcuts
             GC.SuppressFinalize(this);
         }
 
-        private async Task<T> api<T>(HttpMethod method, string path, object? body = null)
+        private async Task<T> Api<T>(HttpMethod method, string path, string body = null)
         {
             if (client is null)
             {
-                throw new Exception($"{nameof(ServerConnection)}.{nameof(ServerConnection.api)} called before {nameof(BaseUrl)} has been set");
+                throw new Exception($"{nameof(ServerConnection)}.{nameof(ServerConnection.Api)} called before {nameof(BaseUrl)} has been set");
             }
             if (Token is null)
             {
-                throw new Exception($"{nameof(ServerConnection)}.{nameof(ServerConnection.api)} called before {nameof(Token)} has been set");
+                throw new Exception($"{nameof(ServerConnection)}.{nameof(ServerConnection.Api)} called before {nameof(Token)} has been set");
             }
 
             using var message = new HttpRequestMessage(method, path);
             message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token);
             message.Headers.Add("Accept", "application/json");
 
-            using var bodyStream = new MemoryStream();
+            //using var bodyStream = new MemoryStream();
+            var serializer = new JsonSerializer();
             if (!(body is null))
             {
-                if (body is string stringBody)
-                {
-                    var bytes = Encoding.UTF8.GetBytes(stringBody);
-                    await bodyStream.WriteAsync(bytes, 0, bytes.Length);
-                }
-                else
-                {
-                    await JsonSerializer.SerializeAsync(bodyStream, body);
-                }
-                message.Content = new StreamContent(bodyStream);
-                message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+
+                //= new StreamContent(bodyStream);
+                message.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+                //message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
             }
 
             using var response = await client.SendAsync(message);
             response.EnsureSuccessStatusCode();
 
             using var stream = await response.Content.ReadAsStreamAsync();
-            return await JsonSerializer.DeserializeAsync<T>(stream);
+            var jsonTextReader = new JsonTextReader(new StreamReader(stream));
+
+            return serializer.Deserialize<T>(jsonTextReader);
+            //return await JsonSerializer.DeserializeAsync<T>(stream);
         }
 
         public async Task<string?> Ping()
         {
-            var response = await api<PingResponse>(HttpMethod.Get, "");
+            var response = await Api<PingResponse>(HttpMethod.Get, "");
             return response.message;
         }
 
         public async Task<List<Service>> ListServices()
         {
-            var response = await api<List<ServiceResponseItem>>(HttpMethod.Get, "services");
+            var response = await Api<List<ServiceResponseItem>>(HttpMethod.Get, "services");
             return (
                 from item in response
-                from service in item.services
-                orderby item.domain, service.Key
-                select new Service($"{item.domain}/{service.Key}", service.Value.description)
+                from service in item.Services
+                orderby item.Domain, service.Key
+                select new Service(service.Value.Description, item.Domain,service.Key, service.Value.Fields)
             ).ToList();
         }
 
         public async Task<List<object>> CallService(string path, string payload = "")
         {
-            return await api<List<object>>(HttpMethod.Post, $"services/{path}", payload);
+            return await Api<List<object>>(HttpMethod.Post, $"services/{path}", payload);
+        }
+
+        public async Task<List<T>> Get<T>(string path, string payload = null) where T : class
+        {
+            return await Api<List<T>>(HttpMethod.Get, $"{path}", payload);
         }
     }
 }
